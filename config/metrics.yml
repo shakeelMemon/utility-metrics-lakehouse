@@ -1,0 +1,199 @@
+# Metric catalogue: every business metric is defined ONCE here.
+# The metrics notebook turns each entry into SQL over a gold table and writes the
+# results to gold.metric_values (month x region, plus an 'ALL' region rollup that is
+# recalculated from the detail, never averaged). Power BI reads those values, so every
+# report shows the same number.
+#
+# Fields: id, name, domain, owner, unit, description,
+#         source (gold table), date_col, region_col (default: region),
+#         expression (SQL aggregate), filter (optional SQL condition)
+#
+# To add a metric: add an entry, run the metrics job, done. No report changes needed.
+
+metrics:
+  # ------------------------------------------------------------------ Billing
+  - {id: BIL001, name: Billed revenue, domain: Billing, owner: Revenue Accounting, unit: CAD,
+     description: "Total amount billed to customers in the month (bills with status BILLED).",
+     source: gold.fact_billing, date_col: bill_date, expression: "SUM(billed_amount)", filter: "bill_status = 'BILLED'"}
+  - {id: BIL002, name: Billed energy, domain: Billing, owner: Revenue Accounting, unit: kWh,
+     description: "Total kWh billed in the month.",
+     source: gold.fact_billing, date_col: bill_date, expression: "SUM(billed_kwh)", filter: "bill_status = 'BILLED'"}
+  - {id: BIL003, name: Bills issued, domain: Billing, owner: Billing Operations, unit: count,
+     description: "Number of bills issued in the month.",
+     source: gold.fact_billing, date_col: bill_date, expression: "COUNT(*)", filter: "bill_status = 'BILLED'"}
+  - {id: BIL004, name: Average bill amount, domain: Billing, owner: Revenue Accounting, unit: CAD,
+     description: "Average amount per bill issued.",
+     source: gold.fact_billing, date_col: bill_date, expression: "AVG(billed_amount)", filter: "bill_status = 'BILLED'"}
+  - {id: BIL005, name: Estimated bill rate, domain: Billing, owner: Billing Operations, unit: pct,
+     description: "Share of bills based mainly on estimated meter reads.",
+     source: gold.fact_billing, date_col: bill_date,
+     expression: "AVG(CASE WHEN is_estimated THEN 1.0 ELSE 0.0 END)", filter: "bill_status = 'BILLED'"}
+  - {id: BIL006, name: Bill reversal rate, domain: Billing, owner: Billing Operations, unit: pct,
+     description: "Share of bills that were reversed and re-billed (a billing-accuracy indicator).",
+     source: gold.fact_billing, date_col: bill_date,
+     expression: "SUM(CASE WHEN bill_status = 'REVERSED' THEN 1 ELSE 0 END) / NULLIF(SUM(CASE WHEN bill_status IN ('BILLED','REVERSED') THEN 1 ELSE 0 END), 0)"}
+  - {id: BIL007, name: Average revenue per kWh, domain: Billing, owner: Rates, unit: CAD/kWh,
+     description: "Billed revenue divided by billed kWh (effective average rate).",
+     source: gold.fact_billing, date_col: bill_date,
+     expression: "SUM(billed_amount) / NULLIF(SUM(billed_kwh), 0)", filter: "bill_status = 'BILLED'"}
+  - {id: BIL008, name: Residential billed revenue, domain: Billing, owner: Revenue Accounting, unit: CAD,
+     description: "Billed revenue from residential customers.",
+     source: gold.fact_billing, date_col: bill_date, expression: "SUM(billed_amount)",
+     filter: "bill_status = 'BILLED' AND segment = 'RES'"}
+  - {id: BIL009, name: Commercial and industrial billed revenue, domain: Billing, owner: Revenue Accounting, unit: CAD,
+     description: "Billed revenue from commercial and industrial customers.",
+     source: gold.fact_billing, date_col: bill_date, expression: "SUM(billed_amount)",
+     filter: "bill_status = 'BILLED' AND segment IN ('COM','IND')"}
+  - {id: BIL010, name: Average kWh per bill, domain: Billing, owner: Billing Operations, unit: kWh,
+     description: "Average billed kWh per bill.",
+     source: gold.fact_billing, date_col: bill_date, expression: "AVG(billed_kwh)", filter: "bill_status = 'BILLED'"}
+  - {id: BIL011, name: Accounts billed, domain: Billing, owner: Billing Operations, unit: count,
+     description: "Distinct contract accounts billed in the month.",
+     source: gold.fact_billing, date_col: bill_date, expression: "COUNT(DISTINCT account_id)", filter: "bill_status = 'BILLED'"}
+
+  # ------------------------------------------------------------------ Accounts receivable (month-end snapshot)
+  - {id: AR001, name: AR open balance, domain: Accounts Receivable, owner: Credit and Collections, unit: CAD,
+     description: "Unpaid billed amount at month end.",
+     source: gold.fact_ar_region_month, date_col: month_end, expression: "SUM(ar_open_balance)"}
+  - {id: AR002, name: AR over 30 days, domain: Accounts Receivable, owner: Credit and Collections, unit: CAD,
+     description: "Open balance more than 30 days past the due date.",
+     source: gold.fact_ar_region_month, date_col: month_end, expression: "SUM(ar_over_30)"}
+  - {id: AR003, name: AR over 60 days, domain: Accounts Receivable, owner: Credit and Collections, unit: CAD,
+     description: "Open balance more than 60 days past the due date.",
+     source: gold.fact_ar_region_month, date_col: month_end, expression: "SUM(ar_over_60)"}
+  - {id: AR004, name: AR over 90 days, domain: Accounts Receivable, owner: Credit and Collections, unit: CAD,
+     description: "Open balance more than 90 days past the due date.",
+     source: gold.fact_ar_region_month, date_col: month_end, expression: "SUM(ar_over_90)"}
+  - {id: AR005, name: Share of AR over 90 days, domain: Accounts Receivable, owner: Credit and Collections, unit: pct,
+     description: "AR over 90 days divided by total open AR.",
+     source: gold.fact_ar_region_month, date_col: month_end,
+     expression: "SUM(ar_over_90) / NULLIF(SUM(ar_open_balance), 0)"}
+  - {id: AR006, name: Days sales outstanding, domain: Accounts Receivable, owner: Finance, unit: days,
+     description: "Simplified DSO: month-end open AR divided by the month's billed revenue, times 30.",
+     source: gold.fact_ar_region_month, date_col: month_end,
+     expression: "SUM(ar_open_balance) / NULLIF(SUM(billed_in_month), 0) * 30"}
+  - {id: AR007, name: Collection rate, domain: Accounts Receivable, owner: Credit and Collections, unit: pct,
+     description: "Payments received in the month divided by revenue billed in the month.",
+     source: gold.fact_ar_region_month, date_col: month_end,
+     expression: "SUM(paid_in_month) / NULLIF(SUM(billed_in_month), 0)"}
+  - {id: AR008, name: Open bills, domain: Accounts Receivable, owner: Credit and Collections, unit: count,
+     description: "Number of bills with an open balance at month end.",
+     source: gold.fact_ar_region_month, date_col: month_end, expression: "SUM(open_bills)"}
+
+  # ------------------------------------------------------------------ Payments
+  - {id: PAY001, name: Payments received, domain: Payments, owner: Treasury, unit: CAD,
+     description: "Total payments received in the month.",
+     source: gold.fact_payment, date_col: payment_date, expression: "SUM(payment_amount)"}
+  - {id: PAY002, name: Payment count, domain: Payments, owner: Treasury, unit: count,
+     description: "Number of payments received.",
+     source: gold.fact_payment, date_col: payment_date, expression: "COUNT(*)"}
+  - {id: PAY003, name: Online payment share, domain: Payments, owner: Customer Experience, unit: pct,
+     description: "Share of payment amount received through online channels.",
+     source: gold.fact_payment, date_col: payment_date,
+     expression: "SUM(CASE WHEN channel = 'ONLINE' THEN payment_amount ELSE 0 END) / NULLIF(SUM(payment_amount), 0)"}
+  - {id: PAY004, name: Pre-authorized payment share, domain: Payments, owner: Customer Experience, unit: pct,
+     description: "Share of payment amount received by pre-authorized debit (PAP).",
+     source: gold.fact_payment, date_col: payment_date,
+     expression: "SUM(CASE WHEN channel = 'PAP' THEN payment_amount ELSE 0 END) / NULLIF(SUM(payment_amount), 0)"}
+  - {id: PAY005, name: Late payment rate, domain: Payments, owner: Credit and Collections, unit: pct,
+     description: "Share of payments received after the bill due date.",
+     source: gold.fact_payment, date_col: payment_date, expression: "AVG(CASE WHEN is_late THEN 1.0 ELSE 0.0 END)"}
+  - {id: PAY006, name: Average days to pay, domain: Payments, owner: Credit and Collections, unit: days,
+     description: "Average days between bill date and payment date.",
+     source: gold.fact_payment, date_col: payment_date, expression: "AVG(days_to_pay)"}
+
+  # ------------------------------------------------------------------ Meter and usage
+  - {id: USE001, name: Energy consumed, domain: Meter and Usage, owner: Load Forecasting, unit: kWh,
+     description: "Total kWh measured by meters in the month.",
+     source: gold.fact_daily_usage, date_col: read_date, expression: "SUM(kwh)"}
+  - {id: USE002, name: Average daily kWh per meter, domain: Meter and Usage, owner: Load Forecasting, unit: kWh,
+     description: "Average daily consumption per meter.",
+     source: gold.fact_daily_usage, date_col: read_date, expression: "AVG(kwh)"}
+  - {id: USE003, name: Actual read rate, domain: Meter and Usage, owner: Meter Operations, unit: pct,
+     description: "Share of daily reads that were actual (not estimated).",
+     source: gold.fact_daily_usage, date_col: read_date,
+     expression: "AVG(CASE WHEN read_quality = 'ACTUAL' THEN 1.0 ELSE 0.0 END)"}
+  - {id: USE004, name: Estimated reads, domain: Meter and Usage, owner: Meter Operations, unit: count,
+     description: "Number of estimated daily reads.",
+     source: gold.fact_daily_usage, date_col: read_date, expression: "SUM(CASE WHEN is_estimated THEN 1 ELSE 0 END)"}
+  - {id: USE005, name: Active meters, domain: Meter and Usage, owner: Meter Operations, unit: count,
+     description: "Distinct meters with at least one read in the month.",
+     source: gold.fact_daily_usage, date_col: read_date, expression: "COUNT(DISTINCT meter_id)"}
+  - {id: USE006, name: Residential average daily kWh, domain: Meter and Usage, owner: Load Forecasting, unit: kWh,
+     description: "Average daily consumption per residential meter.",
+     source: gold.fact_daily_usage, date_col: read_date, expression: "AVG(kwh)", filter: "segment = 'RES'"}
+  - {id: USE007, name: Zero-usage meter days, domain: Meter and Usage, owner: Meter Operations, unit: count,
+     description: "Meter-days with zero consumption (possible vacant premise or meter fault).",
+     source: gold.fact_daily_usage, date_col: read_date, expression: "SUM(CASE WHEN kwh = 0 THEN 1 ELSE 0 END)"}
+  - {id: USE008, name: Meter reads received, domain: Meter and Usage, owner: Meter Operations, unit: count,
+     description: "Number of valid daily reads loaded.",
+     source: gold.fact_daily_usage, date_col: read_date, expression: "COUNT(*)"}
+
+  # ------------------------------------------------------------------ Customer operations / call centre
+  - {id: CC001, name: Calls offered, domain: Customer Operations, owner: Contact Centre, unit: count,
+     description: "All calls that reached the contact centre queue.",
+     source: gold.fact_contact_call, date_col: call_date, expression: "COUNT(*)"}
+  - {id: CC002, name: Calls answered, domain: Customer Operations, owner: Contact Centre, unit: count,
+     description: "Calls answered by an agent.",
+     source: gold.fact_contact_call, date_col: call_date, expression: "SUM(CASE WHEN NOT is_abandoned THEN 1 ELSE 0 END)"}
+  - {id: CC003, name: Abandon rate, domain: Customer Operations, owner: Contact Centre, unit: pct,
+     description: "Share of calls where the customer hung up before being answered.",
+     source: gold.fact_contact_call, date_col: call_date, expression: "AVG(CASE WHEN is_abandoned THEN 1.0 ELSE 0.0 END)"}
+  - {id: CC004, name: Average handle time, domain: Customer Operations, owner: Contact Centre, unit: seconds,
+     description: "Average talk and wrap-up time of answered calls.",
+     source: gold.fact_contact_call, date_col: call_date, expression: "AVG(CASE WHEN NOT is_abandoned THEN handle_sec END)"}
+  - {id: CC005, name: Average speed of answer, domain: Customer Operations, owner: Contact Centre, unit: seconds,
+     description: "Average queue wait before an answered call was picked up.",
+     source: gold.fact_contact_call, date_col: call_date, expression: "AVG(CASE WHEN NOT is_abandoned THEN queue_wait_sec END)"}
+  - {id: CC006, name: Service level (30 seconds), domain: Customer Operations, owner: Contact Centre, unit: pct,
+     description: "Share of offered calls answered within 30 seconds.",
+     source: gold.fact_contact_call, date_col: call_date, expression: "AVG(CASE WHEN answered_within_30s THEN 1.0 ELSE 0.0 END)"}
+  - {id: CC007, name: First call resolution, domain: Customer Operations, owner: Contact Centre, unit: pct,
+     description: "Share of answered calls resolved on the first contact.",
+     source: gold.fact_contact_call, date_col: call_date,
+     expression: "AVG(CASE WHEN is_first_call_resolved THEN 1.0 WHEN NOT is_first_call_resolved THEN 0.0 END)"}
+  - {id: CC008, name: Billing inquiry calls, domain: Customer Operations, owner: Contact Centre, unit: count,
+     description: "Calls about bills.",
+     source: gold.fact_contact_call, date_col: call_date, expression: "SUM(CASE WHEN call_reason = 'BILLING' THEN 1 ELSE 0 END)"}
+  - {id: CC009, name: Outage calls, domain: Customer Operations, owner: Contact Centre, unit: count,
+     description: "Calls about power outages.",
+     source: gold.fact_contact_call, date_col: call_date, expression: "SUM(CASE WHEN call_reason = 'OUTAGE' THEN 1 ELSE 0 END)"}
+  - {id: CC010, name: Billing call share, domain: Customer Operations, owner: Contact Centre, unit: pct,
+     description: "Share of calls that are about billing.",
+     source: gold.fact_contact_call, date_col: call_date, expression: "AVG(CASE WHEN call_reason = 'BILLING' THEN 1.0 ELSE 0.0 END)"}
+
+  # ------------------------------------------------------------------ Reliability / outage management
+  - {id: REL001, name: Outage events, domain: Reliability, owner: Distribution Operations, unit: count,
+     description: "Number of outage events (planned and unplanned).",
+     source: gold.fact_reliability_region_month, date_col: month_start, expression: "SUM(outages)"}
+  - {id: REL002, name: SAIDI, domain: Reliability, owner: Distribution Operations, unit: minutes,
+     description: "System Average Interruption Duration Index: unplanned customer-minutes interrupted / customers served.",
+     source: gold.fact_reliability_region_month, date_col: month_start,
+     expression: "SUM(customer_minutes_interrupted) / NULLIF(SUM(customers_served), 0)"}
+  - {id: REL003, name: SAIFI, domain: Reliability, owner: Distribution Operations, unit: interruptions,
+     description: "System Average Interruption Frequency Index: unplanned customer interruptions / customers served.",
+     source: gold.fact_reliability_region_month, date_col: month_start,
+     expression: "SUM(customer_interruptions) / NULLIF(SUM(customers_served), 0)"}
+  - {id: REL004, name: CAIDI, domain: Reliability, owner: Distribution Operations, unit: minutes,
+     description: "Customer Average Interruption Duration Index: average restoration time per interrupted customer (SAIDI / SAIFI).",
+     source: gold.fact_reliability_region_month, date_col: month_start,
+     expression: "SUM(customer_minutes_interrupted) / NULLIF(SUM(customer_interruptions), 0)"}
+  - {id: REL005, name: Planned outage share, domain: Reliability, owner: Distribution Operations, unit: pct,
+     description: "Share of outage events that were planned maintenance.",
+     source: gold.fact_reliability_region_month, date_col: month_start,
+     expression: "SUM(planned_outages) / NULLIF(SUM(outages), 0)"}
+  - {id: REL006, name: Customers served, domain: Reliability, owner: Distribution Operations, unit: count,
+     description: "Premises served (the denominator for SAIDI and SAIFI).",
+     source: gold.fact_reliability_region_month, date_col: month_start, expression: "SUM(customers_served)"}
+  - {id: REL007, name: Average restoration time, domain: Reliability, owner: Distribution Operations, unit: minutes,
+     description: "Average duration of unplanned outage events.",
+     source: gold.fact_outage, date_col: outage_date, expression: "AVG(duration_min)", filter: "NOT is_planned"}
+  - {id: REL008, name: Weather outages, domain: Reliability, owner: Distribution Operations, unit: count,
+     description: "Outage events caused by weather.",
+     source: gold.fact_outage, date_col: outage_date, expression: "SUM(CASE WHEN cause = 'WEATHER' THEN 1 ELSE 0 END)"}
+
+  # ------------------------------------------------------------------ Customers
+  - {id: CUS001, name: Move-ins, domain: Customers, owner: Customer Operations, unit: count,
+     description: "New contract accounts starting service in the month.",
+     source: gold.dim_account, date_col: move_in_date, expression: "COUNT(*)",
+     filter: "move_in_date >= (SELECT min(date) FROM {cat}.gold.dim_date)"}

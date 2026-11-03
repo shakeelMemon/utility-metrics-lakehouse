@@ -1,0 +1,110 @@
+// =====================================================================
+// Power BI measures for the Utility Metrics Lakehouse
+// Paste each measure into Power BI Desktop: Modeling > New measure.
+// Put them in a "_Measures" table (Home > Enter data > empty table) to keep things tidy.
+// =====================================================================
+
+
+// ---------- 1. Metric layer (the governed numbers, defined once in Databricks) ----------
+// v_metric_values has one row per metric x month x region, plus region = "ALL",
+// recalculated in gold (never averaged). This measure never adds regions together,
+// so a ratio such as SAIDI or Abandon rate is always correct.
+
+Metric Value =
+IF (
+    HASONEVALUE ( v_metric_values[metric_id] ),
+    IF (
+        ISFILTERED ( v_metric_values[region] ),
+        IF ( HASONEVALUE ( v_metric_values[region] ), SUM ( v_metric_values[value] ) ),
+        CALCULATE ( SUM ( v_metric_values[value] ), v_metric_values[region] = "ALL" )
+    )
+)
+
+Metric Value (formatted) =
+VAR v = [Metric Value]
+VAR u = SELECTEDVALUE ( v_metric_values[unit] )
+RETURN
+    SWITCH (
+        TRUE (),
+        ISBLANK ( v ), BLANK (),
+        u = "pct", FORMAT ( v, "0.0%" ),
+        u = "CAD", FORMAT ( v, "$#,##0" ),
+        u = "CAD/kWh", FORMAT ( v, "$0.0000" ),
+        FORMAT ( v, "#,##0.0" )
+    )
+
+Metric Value Prior Month =
+CALCULATE ( [Metric Value], DATEADD ( dim_date[date], -1, MONTH ) )
+
+Metric Change vs Prior Month =
+DIVIDE ( [Metric Value] - [Metric Value Prior Month], [Metric Value Prior Month] )
+
+// Latest-month KPI card for one metric, e.g. SAIDI:
+SAIDI (latest month) =
+VAR m = CALCULATE ( MAX ( v_metric_values[month] ), v_metric_values[metric_id] = "REL002" )
+RETURN CALCULATE ( [Metric Value], v_metric_values[metric_id] = "REL002", v_metric_values[month] = m )
+
+Billed Revenue (latest month) =
+VAR m = CALCULATE ( MAX ( v_metric_values[month] ), v_metric_values[metric_id] = "BIL001" )
+RETURN CALCULATE ( [Metric Value], v_metric_values[metric_id] = "BIL001", v_metric_values[month] = m )
+
+Abandon Rate (latest month) =
+VAR m = CALCULATE ( MAX ( v_metric_values[month] ), v_metric_values[metric_id] = "CC003" )
+RETURN CALCULATE ( [Metric Value], v_metric_values[metric_id] = "CC003", v_metric_values[month] = m )
+
+AR over 90 Share (latest month) =
+VAR m = CALCULATE ( MAX ( v_metric_values[month] ), v_metric_values[metric_id] = "AR005" )
+RETURN CALCULATE ( [Metric Value], v_metric_values[metric_id] = "AR005", v_metric_values[month] = m )
+
+
+// ---------- 2. Star-schema measures (for drill-down on the detail facts) ----------
+// These recalculate from the facts so users can slice by rate category, cause, reason, etc.
+// The "Reconciliation" page checks they match the metric layer.
+
+Billed Revenue =
+CALCULATE ( SUM ( fact_billing[billed_amount] ), fact_billing[bill_status] = "BILLED" )
+
+Bills Issued =
+CALCULATE ( COUNTROWS ( fact_billing ), fact_billing[bill_status] = "BILLED" )
+
+Estimated Bill Rate =
+DIVIDE (
+    CALCULATE ( COUNTROWS ( fact_billing ), fact_billing[bill_status] = "BILLED", fact_billing[is_estimated] = TRUE () ),
+    [Bills Issued]
+)
+
+Payments Received = SUM ( fact_payment[payment_amount] )
+
+Energy Consumed (kWh) = SUM ( fact_daily_usage[kwh] )
+
+Calls Offered = COUNTROWS ( fact_contact_call )
+
+Abandon Rate =
+DIVIDE ( CALCULATE ( COUNTROWS ( fact_contact_call ), fact_contact_call[is_abandoned] = TRUE () ), [Calls Offered] )
+
+Average Handle Time (sec) =
+CALCULATE ( AVERAGE ( fact_contact_call[handle_sec] ), fact_contact_call[is_abandoned] = FALSE () )
+
+AR Open Balance = SUM ( fact_ar_region_month[ar_open_balance] )
+AR Current = SUM ( fact_ar_region_month[ar_current] )
+AR Over 30 = SUM ( fact_ar_region_month[ar_over_30] )
+AR Over 60 = SUM ( fact_ar_region_month[ar_over_60] )
+AR Over 90 = SUM ( fact_ar_region_month[ar_over_90] )
+AR 1-30 Days = [AR Open Balance] - [AR Current] - [AR Over 30]
+AR 31-60 Days = [AR Over 30] - [AR Over 60]
+AR 61-90 Days = [AR Over 60] - [AR Over 90]
+
+SAIDI (minutes) =
+DIVIDE ( SUM ( fact_reliability_region_month[customer_minutes_interrupted] ),
+         SUM ( fact_reliability_region_month[customers_served] ) )
+
+SAIFI =
+DIVIDE ( SUM ( fact_reliability_region_month[customer_interruptions] ),
+         SUM ( fact_reliability_region_month[customers_served] ) )
+
+CAIDI (minutes) = DIVIDE ( [SAIDI (minutes)], [SAIFI] )
+
+
+// ---------- 3. Reconciliation (star schema vs metric layer, should be 0) ----------
+Billed Revenue Difference =
+[Billed Revenue] - CALCULATE ( [Metric Value], v_metric_values[metric_id] = "BIL001" )

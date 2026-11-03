@@ -1,0 +1,159 @@
+# Source catalogue: one entry per landing folder.
+# bronze: how Auto Loader reads the files (kept as raw strings, exactly as received)
+# silver: SAP technical names -> business names, types, keys and data-quality rules
+#
+# Types: string | int | double | date (ISO) | sap_date (yyyyMMdd) | timestamp
+#        | sap_amount (trailing minus = negative) | flag (X/Y/1/TRUE = true, blank/N = false)
+
+sap_bp:
+  format: csv
+  silver_table: customer_scd2          # SCD Type 2 (history kept)
+  scd2: true
+  keys: [partner_id]
+  order_by: change_date
+  scd2_attributes: [customer_type, first_name, last_name, org_name, segment, region, email]
+  columns:
+    PARTNER:      {name: partner_id,    type: string}
+    BU_TYPE:      {name: customer_type, type: string}
+    NAME_FIRST:   {name: first_name,    type: string}
+    NAME_LAST:    {name: last_name,     type: string}
+    NAME_ORG1:    {name: org_name,      type: string}
+    CUST_SEGMENT: {name: segment,       type: string}
+    REGION:       {name: region,        type: string}
+    SMTP_ADDR:    {name: email,         type: string}
+    CHDAT:        {name: change_date,   type: sap_date}
+  checks:
+    partner_not_null: "partner_id IS NOT NULL"
+    change_date_valid: "change_date IS NOT NULL"
+    segment_valid: "segment IN ('RES','COM','IND')"
+
+sap_premise:
+  format: csv
+  silver_table: premise
+  keys: [premise_id]
+  columns:
+    VSTELLE:      {name: premise_id,   type: string}
+    STREET:       {name: street,       type: string}
+    CITY1:        {name: city,         type: string}
+    REGION:       {name: region,       type: string}
+    PREMISE_TYPE: {name: premise_type, type: string}
+  checks:
+    premise_not_null: "premise_id IS NOT NULL"
+    region_not_null: "region IS NOT NULL"
+
+sap_contract_account:
+  format: csv
+  silver_table: contract_account
+  keys: [account_id]
+  columns:
+    VKONT:         {name: account_id,    type: string}
+    GPART:         {name: partner_id,    type: string}
+    VSTELLE:       {name: premise_id,    type: string}
+    RATE_CAT:      {name: rate_category, type: string}
+    MOVE_IN_DATE:  {name: move_in_date,  type: sap_date}
+    MOVE_OUT_DATE: {name: move_out_date, type: sap_date}
+  checks:
+    account_not_null: "account_id IS NOT NULL"
+    partner_not_null: "partner_id IS NOT NULL"
+
+sap_meter:
+  format: csv
+  silver_table: meter
+  keys: [meter_id]
+  columns:
+    EQUNR:        {name: meter_id,     type: string}
+    VSTELLE:      {name: premise_id,   type: string}
+    METER_TYPE:   {name: meter_type,   type: string}
+    INSTALL_DATE: {name: install_date, type: sap_date}
+  checks:
+    meter_not_null: "meter_id IS NOT NULL"
+
+ami_meter_reads:
+  format: json
+  silver_table: meter_read_daily
+  keys: [meter_id, read_date]
+  columns:
+    meter_id:     {name: meter_id,     type: string}
+    premise_id:   {name: premise_id,   type: string}
+    read_date:    {name: read_date,    type: date}
+    kwh:          {name: kwh,          type: double}
+    read_quality: {name: read_quality, type: string}
+    voltage_v:    {name: voltage_v,    type: double}     # schema drift: only in later files
+  checks:
+    meter_not_null: "meter_id IS NOT NULL"
+    read_date_valid: "read_date IS NOT NULL"
+    kwh_not_null: "kwh IS NOT NULL"
+    kwh_not_negative: "kwh >= 0"
+    kwh_plausible: "kwh < 50000"
+
+sap_billing_doc:
+  format: csv
+  silver_table: billing_document
+  keys: [bill_id]
+  columns:
+    BELNR:          {name: bill_id,       type: string}
+    VKONT:          {name: account_id,    type: string}
+    BUDAT:          {name: bill_date,     type: sap_date}
+    BEGABRPE:       {name: period_start,  type: sap_date}
+    ENDABRPE:       {name: period_end,    type: sap_date}
+    KWH:            {name: billed_kwh,    type: double}
+    BETRW:          {name: billed_amount, type: sap_amount}
+    FAEDN:          {name: due_date,      type: sap_date}
+    BILL_STATUS:    {name: bill_status,   type: string}
+    ESTIMATED_FLAG: {name: is_estimated,  type: flag}
+  checks:
+    bill_not_null: "bill_id IS NOT NULL"
+    account_not_null: "account_id IS NOT NULL"
+    bill_date_valid: "bill_date IS NOT NULL"
+    amount_not_null: "billed_amount IS NOT NULL"
+    status_valid: "bill_status IN ('BILLED','REVERSED','REVERSAL')"
+
+sap_payment:
+  format: csv
+  silver_table: payment
+  keys: [payment_id]
+  columns:
+    OPBEL:   {name: payment_id,     type: string}
+    VKONT:   {name: account_id,     type: string}
+    BELNR:   {name: bill_id,        type: string}
+    BUDAT:   {name: payment_date,   type: sap_date}
+    BETRZ:   {name: payment_amount, type: sap_amount}
+    CHANNEL: {name: channel,        type: string}
+  checks:
+    payment_not_null: "payment_id IS NOT NULL"
+    amount_positive: "payment_amount > 0"
+
+call_center_calls:
+  format: csv
+  silver_table: contact_call
+  keys: [call_id]
+  columns:
+    call_id:             {name: call_id,                type: string}
+    partner_id:          {name: partner_id,             type: string}
+    call_start_ts:       {name: call_start_ts,          type: timestamp}
+    queue_wait_sec:      {name: queue_wait_sec,         type: int}
+    handle_sec:          {name: handle_sec,             type: int}
+    call_reason:         {name: call_reason,            type: string}
+    abandoned:           {name: is_abandoned,           type: flag}
+    first_call_resolved: {name: is_first_call_resolved, type: flag}
+  checks:
+    call_not_null: "call_id IS NOT NULL"
+    start_valid: "call_start_ts IS NOT NULL"
+    handle_not_negative: "handle_sec >= 0"
+
+oms_outages:
+  format: csv
+  silver_table: outage
+  keys: [outage_id]
+  columns:
+    outage_id:          {name: outage_id,          type: string}
+    region:             {name: region,             type: string}
+    outage_start_ts:    {name: outage_start_ts,    type: timestamp}
+    restore_ts:         {name: restore_ts,         type: timestamp}
+    cause:              {name: cause,              type: string}
+    customers_affected: {name: customers_affected, type: int}
+    planned:            {name: is_planned,         type: flag}
+  checks:
+    outage_not_null: "outage_id IS NOT NULL"
+    restore_after_start: "restore_ts >= outage_start_ts"
+    affected_positive: "customers_affected > 0"

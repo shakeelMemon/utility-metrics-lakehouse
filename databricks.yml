@@ -1,0 +1,23 @@
+# Databricks Asset Bundle: deploys the notebooks and the pipeline job.
+#   databricks bundle validate
+#   databricks bundle deploy -t dev
+#   databricks bundle run utility_metrics_pipeline -t dev
+bundle:
+  name: utility-metrics-lakehouse
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Unity Catalog catalog for all schemas
+    default: utility_lab
+
+targets:
+  dev:
+    mode: development
+    default: true
+  prod:
+    mode: production
+    variables:
+      catalog: utility_prod
