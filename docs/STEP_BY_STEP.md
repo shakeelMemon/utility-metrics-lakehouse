@@ -50,16 +50,17 @@ Run all with `mode = initial`. It writes six months of data (May–Oct 2026) to
 | `sap_bp` | 1 full + 2 change files | ~1,300 |
 | `sap_premise`, `sap_contract_account`, `sap_meter` | 1 each | 1,200 each |
 | `ami_meter_reads` | 27 weekly JSON files | ~216,000 |
-| `sap_billing_doc`, `sap_payment` | monthly CSV | ~5,900 / ~5,200 |
+| `_sap_system` | `billing_doc.csv`, `payment.csv`: stand-ins for the SAP tables, with SAP's changed-on date `AEDAT` | ~5,900 / ~5,200 |
+| `sap_billing_doc`, `sap_payment` | filled by `01b_sap_extract` (only changed rows) | first run = full load |
 | `call_center_calls`, `oms_outages` | monthly CSV | ~4,000 / ~75 |
 
-✅ Check: open the volume in Catalog explorer and preview `sap_billing_doc/billing_2026-06.csv`.
+✅ Check: open the volume in Catalog explorer and preview `_sap_system/billing_doc.csv`.
 Notice the SAP formats: `BUDAT = 20260603`, `BETRW` amounts, and `R...` reversal documents with `125.40-`.
 
 ## Step 5: Run the pipeline job
 
-- **Git folder:** **Workflows → Create job**, add the seven notebook tasks in order
-  (`00_setup` → `02_bronze_autoloader` → `03_silver` → `04_gold` → `05_metrics` →
+- **Git folder:** **Workflows → Create job**, add the eight notebook tasks in order
+  (`00_setup` → `01b_sap_extract` → `02_bronze_autoloader` → `03_silver` → `04_gold` → `05_metrics` →
   `06_data_quality` → `07_maintenance`), add a job parameter `catalog = utility_lab`, and **Run now**.
   You can also run the notebooks one by one.
 - **Bundle:** `databricks bundle run utility_metrics_pipeline -t dev`
@@ -81,6 +82,10 @@ Then run `sql/verify.sql` in the **SQL editor**.
 ## Step 6: Practise incremental loading (the most realistic part)
 
 1. Run `01_generate_source_files` with `mode = increment`, `increment_date = 2026-11-01`.
+   It also changes the SAP tables: one bill is corrected and two payments are added, all with
+   `AEDAT = 20261101`. In the job run, `01b_sap_extract` prints the high-water mark, the extract
+   window (high-water mark − 1 day) and the linked-server `OPENQUERY` it would send to SAP, and
+   lands only the changed rows.
    It adds one day of reads (with a **duplicate** and a **late correction** for Oct 31) and that
    day's calls.
 2. Run the job again.
@@ -99,6 +104,13 @@ SELECT * FROM utility_lab.ops.watermarks;
 ## Step 7: Power BI
 
 Follow `powerbi/POWERBI_GUIDE.md`.
+
+## Updating from the earlier version
+
+The SAP extract step changed how billing and payment files arrive. If you ran the earlier
+version, start clean so silver gets the new `changed_on` column for every row:
+`DROP CATALOG utility_lab CASCADE;`, then run `00_setup`, `01_generate_source_files`
+(`mode = initial`) and the job again.
 
 ## Step 8: Clean up (optional)
 

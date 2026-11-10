@@ -14,6 +14,8 @@ from utility_lakehouse.generator import generate
 from utility_lakehouse.gold_sql import GOLD_TABLES, render
 from utility_lakehouse.metrics import all_metrics_sql, validate
 from utility_lakehouse.pipeline import load_yaml, prepare_silver
+from utility_lakehouse.generator import sap_changes_for_day
+from utility_lakehouse.sap_extract import SAP_SYSTEM_DIR, extract_source, window_start
 from utility_lakehouse.transforms import scd2_from_versions
 
 CAT = "spark_catalog"
@@ -34,6 +36,9 @@ def built(spark, tmp_path_factory):
     quarantine_counts = {}
     for name, spec in sources.items():
         path = str(landing / name)
+        if spec.get("sap_extract"):
+            extract_source(spark, str(landing / SAP_SYSTEM_DIR / f"{spec['sap_extract']['sap_table']}.csv"),
+                           f"{CAT}.silver.{spec['silver_table']}", spec, f"{path}/extract_1.csv")
         reader = spark.read.option("header", True) if spec["format"] == "csv" else spark.read.option("primitivesAsString", True)
         raw = (reader.csv(path) if spec["format"] == "csv" else reader.json(path))
         bronze = raw.withColumn("_ingest_ts", F.current_timestamp()).withColumn("_source_file", F.col("_metadata.file_path"))
@@ -47,7 +52,7 @@ def built(spark, tmp_path_factory):
         save(spark, spark.sql(render(sql, CAT)), f"gold.{table}")
     metrics = load_yaml("metrics.yml")["metrics"]
     save(spark, spark.sql(all_metrics_sql(metrics, CAT)), "gold.metric_values")
-    return {"summary": summary, "quarantine": quarantine_counts, "metrics": metrics}
+    return {"summary": summary, "quarantine": quarantine_counts, "metrics": metrics, "landing": landing}
 
 
 def test_metric_catalogue_is_valid():
@@ -115,3 +120,35 @@ def test_metric_values_are_sensible(spark):
         assert 0 <= v[pct] <= 1, pct
     assert v["REL002"] > 0 and v["REL003"] > 0
     assert v["BIL001"] > 0 and v["USE001"] > 0
+
+
+def test_second_extract_pulls_only_changed_rows_and_merge_updates(spark, built):
+    """After the full load, SAP changes one bill and adds two payments; the next extract is small."""
+    landing = built["landing"]
+    spec = load_yaml("sources.yml")["sap_billing_doc"]
+    target = f"{CAT}.silver.{spec['silver_table']}"
+    before = spark.table(target)
+    full = before.count()
+    hwm = before.agg(F.max("changed_on")).first()[0]
+
+    day = date.fromordinal(hwm.toordinal() + 2)
+    changes = sap_changes_for_day(str(landing), day)
+    assert changes["sap_bills_corrected"] == 1
+
+    r = extract_source(spark, str(landing / SAP_SYSTEM_DIR / "billing_doc.csv"), target, spec,
+                       str(landing / "sap_billing_doc_increment" / "extract_2.csv"))
+    assert r["high_water_mark"] == hwm and r["since"] == window_start(hwm)
+    # only rows changed in the window: the overlap day (re-read, MERGE de-duplicates) + the corrected bill
+    overlap_day = before.where(F.col("changed_on") >= F.date_sub(F.lit(hwm), 1)).count()
+    assert r["rows"] == overlap_day + 1 and r["rows"] < full
+
+    inc = (spark.read.option("header", True).csv(str(landing / "sap_billing_doc_increment"))
+           .withColumn("_ingest_ts", F.current_timestamp()).withColumn("_source_file", F.lit("extract_2.csv")))
+    good, _bad = prepare_silver(inc, spec)
+    corrected = good.where(F.col("changed_on") == F.lit(day)).collect()
+    assert len(corrected) == 1
+    # MERGE result: one row per bill, the corrected amount wins
+    merged = (before.join(good.select("bill_id"), "bill_id", "left_anti")
+              .unionByName(good.select(*before.columns)))
+    assert merged.count() == full
+    assert merged.where(F.col("bill_id") == corrected[0].bill_id).first().billed_amount == corrected[0].billed_amount

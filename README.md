@@ -19,17 +19,20 @@ Agile sprints.*
  ───────────────────────────────────────────           ─────────────────────────────────────────────────────────
  SAP IS-U  business partner, premise,      ─┐
            contract account, meter,         │   BRONZE            SILVER                    GOLD                    POWER BI
-           billing docs, payments  (CSV)    │   Auto Loader       watermark-incremental     star schema             (SQL warehouse)
+           billing docs, payments ──────┤   Auto Loader       watermark-incremental     star schema             (SQL warehouse)
  AMI head-end  daily meter reads (JSON)    ─┼─▶ raw strings  ───▶ SAP names → business ───▶ dims + facts      ───▶ certified semantic
  Contact centre  calls (CSV)                │   + _ingest_ts      types, dedupe, MERGE      metric_catalog          model, 7 pages,
  Outage mgmt (OMS)  outages (CSV)          ─┘   + _source_file    quarantine, SCD Type 2    metric_values (52)      self-service
                                                 schema drift ok                                  │
                                                                          ops: load_audit, dq_results (quality gate), watermarks
- Orchestration: one Databricks job (Asset Bundle): setup → bronze → silver → gold → metrics → data quality → maintenance
+ SAP billing docs and payments are extracted INCREMENTALLY by SAP's changed-on date (AEDAT):
+   high-water mark = max(changed_on) in silver, minus 1 day overlap → only changed rows land → MERGE on BELNR / OPBEL
+ Orchestration: one Databricks job (Asset Bundle): setup → SAP extract → bronze → silver → gold → metrics → data quality → maintenance
 ```
 
 | Layer | What happens | Key techniques |
 |---|---|---|
+| **SAP extract** | Only SAP records changed since the last load | SAP changed-on date (`AEDAT`); high-water mark taken from the silver table itself (no separate watermark table); 1-day overlap; linked-server `OPENQUERY` statement generated for production (`sap_extract.py`) |
 | **Bronze** | Files loaded exactly as received | Auto Loader, `availableNow`, checkpoints, schema evolution (`voltage_v` appears later), `_metadata.file_path` |
 | **Silver** | Clean, conform, de-duplicate, keep history | SAP field mapping in YAML, `try_cast`, quality rules, quarantine table, Delta `MERGE` upserts (idempotent), late-arriving corrections, **SCD Type 2** customers, watermark-based incremental |
 | **Gold** | Business-ready star schema | Conformed dimensions, facts at a clear grain, AR aging snapshot, reliability inputs, liquid clustering |

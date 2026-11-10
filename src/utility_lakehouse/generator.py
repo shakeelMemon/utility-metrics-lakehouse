@@ -8,8 +8,11 @@ Writes the kind of extracts a utility data platform receives every day:
     sap_premise/            premises (service locations)          CSV
     sap_contract_account/   contract accounts                     CSV
     sap_meter/              meters (equipment)                    CSV
-    sap_billing_doc/        billing documents, one file per month CSV
-    sap_payment/            payments, one file per month          CSV
+  SAP source tables (stand-ins for the SAP system itself, with SAP's changed-on date AEDAT).
+  They are NOT landing folders: notebook 01b extracts only changed rows from them into
+  sap_billing_doc/ and sap_payment/ (see sap_extract.py):
+    _sap_system/billing_doc.csv   billing documents (full table)
+    _sap_system/payment.csv       payments (full table)
   Other systems:
     ami_meter_reads/        smart-meter daily reads (AMI head-end) JSON lines, one file per week
     call_center_calls/      contact-centre calls                  CSV, one file per month
@@ -48,6 +51,9 @@ FIXED = {"RES": 28.50, "COM": 65.00, "IND": 240.00}
 CHANNELS = [("ONLINE", 0.45), ("PAP", 0.30), ("BANK", 0.18), ("IN_PERSON", 0.07)]
 CALL_REASONS = [("BILLING", 0.38), ("PAYMENT", 0.22), ("MOVE", 0.12), ("OUTAGE", 0.10), ("OTHER", 0.18)]
 CAUSES = ["WEATHER", "EQUIPMENT", "TREE_CONTACT", "ANIMAL", "PLANNED_MAINTENANCE"]
+BILLING_COLS = ["BELNR", "VKONT", "BUDAT", "BEGABRPE", "ENDABRPE", "KWH", "BETRW", "FAEDN", "BILL_STATUS",
+                "ESTIMATED_FLAG", "AEDAT"]
+PAYMENT_COLS = ["OPBEL", "VKONT", "BELNR", "BUDAT", "BETRZ", "CHANNEL", "AEDAT"]
 
 
 @dataclass
@@ -249,16 +255,18 @@ def generate(out_dir: str, start: date = date(2026, 5, 1), days: int = 184,
             status = "BILLED"
             if rng.random() < 0.01:                              # reversed and re-billed
                 rows.append([str(bill_no), c.account, sap_date(bill_date), sap_date(month), sap_date(period_end),
-                             f"{kwh:.3f}", sap_amount(amount), sap_date(due), "REVERSED", estimated])
+                             f"{kwh:.3f}", sap_amount(amount), sap_date(due), "REVERSED", estimated,
+                             sap_date(bill_date + timedelta(days=2))])            # changed when reversed
                 rows.append([f"R{bill_no}", c.account, sap_date(bill_date + timedelta(days=2)), sap_date(month),
-                             sap_date(period_end), f"{kwh:.3f}", sap_amount(-amount), sap_date(due), "REVERSAL", estimated])
+                             sap_date(period_end), f"{kwh:.3f}", sap_amount(-amount), sap_date(due), "REVERSAL", estimated,
+                             sap_date(bill_date + timedelta(days=2))])
                 bill_no += 1
                 bill_date_used = bill_date + timedelta(days=4)
                 amount = round(amount * rng.uniform(0.9, 1.0), 2)
             else:
                 bill_date_used = bill_date
             rows.append([str(bill_no), c.account, sap_date(bill_date_used), sap_date(month), sap_date(period_end),
-                         f"{kwh:.3f}", sap_amount(amount), sap_date(due), status, estimated])
+                         f"{kwh:.3f}", sap_amount(amount), sap_date(due), status, estimated, sap_date(bill_date_used)])
 
             # payment behaviour
             p = rng.random()
@@ -272,14 +280,14 @@ def generate(out_dir: str, start: date = date(2026, 5, 1), days: int = 184,
                 pay_no += 1
                 paid = amount if rng.random() < 0.94 else round(amount * rng.uniform(0.3, 0.8), 2)
                 payments_by_month.setdefault(pay_date.strftime("%Y-%m"), []).append(
-                    [str(pay_no), c.account, str(bill_no), sap_date(pay_date), sap_amount(paid), _pick(rng, CHANNELS)])
+                    [str(pay_no), c.account, str(bill_no), sap_date(pay_date), sap_amount(paid), _pick(rng, CHANNELS),
+                     sap_date(pay_date)])
         month = nxt
-    for ym, rows in bills_by_month.items():
-        _write_csv(f"{out_dir}/sap_billing_doc/billing_{ym}.csv",
-                   ["BELNR", "VKONT", "BUDAT", "BEGABRPE", "ENDABRPE", "KWH", "BETRW", "FAEDN", "BILL_STATUS", "ESTIMATED_FLAG"], rows)
-    for ym, rows in payments_by_month.items():
-        _write_csv(f"{out_dir}/sap_payment/payments_{ym}.csv",
-                   ["OPBEL", "VKONT", "BELNR", "BUDAT", "BETRZ", "CHANNEL"], rows)
+    # SAP source tables: one full table each, extracted incrementally by notebook 01b
+    _write_csv(f"{out_dir}/_sap_system/billing_doc.csv", BILLING_COLS,
+               [r for ym in sorted(bills_by_month) for r in bills_by_month[ym]])
+    _write_csv(f"{out_dir}/_sap_system/payment.csv", PAYMENT_COLS,
+               [r for ym in sorted(payments_by_month) for r in payments_by_month[ym]])
     summary["sap_billing_doc"] = sum(len(r) for r in bills_by_month.values())
     summary["sap_payment"] = sum(len(r) for r in payments_by_month.values())
 
@@ -344,10 +352,50 @@ def generate(out_dir: str, start: date = date(2026, 5, 1), days: int = 184,
     return summary
 
 
-def generate_increment(out_dir: str, day: date, n_customers: int = 1200, seed: int = 42) -> dict:
-    """Generate one extra day of AMI reads and calls (to practise incremental loads).
+def _read_csv(path: str) -> tuple[list[str], list[list[str]]]:
+    with open(path, newline="", encoding="utf-8") as f:
+        rows = list(csv.reader(f))
+    return rows[0], rows[1:]
 
-    Includes one re-sent duplicate read and one late correction for the previous day.
+
+def sap_changes_for_day(out_dir: str, day: date) -> dict:
+    """Change the SAP source tables as SAP would during one business day.
+
+    * one existing bill is corrected (amount +5%), so its AEDAT moves to ``day``
+    * two open bills are paid on ``day`` (new payment documents, AEDAT = ``day``)
+    Re-running for the same day changes nothing (safe to repeat).
+    """
+    d = sap_date(day)
+    bhdr, bills = _read_csv(f"{out_dir}/_sap_system/billing_doc.csv")
+    phdr, pays = _read_csv(f"{out_dir}/_sap_system/payment.csv")
+    bi, pi = {c: i for i, c in enumerate(bhdr)}, {c: i for i, c in enumerate(phdr)}
+    billed = [b for b in bills if b[bi["BILL_STATUS"]] == "BILLED"]
+    changed = 0
+    target = billed[day.toordinal() % len(billed)]
+    if target[bi["AEDAT"]] != d:
+        amt = float(target[bi["BETRW"]].rstrip("-"))
+        target[bi["BETRW"]] = sap_amount(round(amt * 1.05, 2))
+        target[bi["AEDAT"]] = d
+        changed += 1
+    paid = {p[pi["BELNR"]] for p in pays}
+    existing = {p[pi["OPBEL"]] for p in pays}
+    new_pays = 0
+    for i, b in enumerate([b for b in billed if b[bi["BELNR"]] not in paid][:2]):
+        opbel = f"95{day.strftime('%y%m%d')}{i:02d}"
+        if opbel in existing:
+            continue
+        pays.append([opbel, b[bi["VKONT"]], b[bi["BELNR"]], d, b[bi["BETRW"]], "ONLINE", d])
+        new_pays += 1
+    _write_csv(f"{out_dir}/_sap_system/billing_doc.csv", bhdr, bills)
+    _write_csv(f"{out_dir}/_sap_system/payment.csv", phdr, pays)
+    return {"sap_bills_corrected": changed, "sap_new_payments": new_pays}
+
+
+def generate_increment(out_dir: str, day: date, n_customers: int = 1200, seed: int = 42) -> dict:
+    """Generate one extra day of source changes (to practise incremental loads).
+
+    AMI reads include one re-sent duplicate and one late correction for the previous day.
+    The SAP source tables get one corrected bill and two new payments (changed-on = day).
     """
     rng = random.Random(seed + day.toordinal())
     customers = build_customers(n_customers, date(2026, 5, 1), seed)
@@ -370,7 +418,7 @@ def generate_increment(out_dir: str, day: date, n_customers: int = 1200, seed: i
     _write_csv(f"{out_dir}/call_center_calls/calls_{day.isoformat()}.csv",
                ["call_id", "partner_id", "call_start_ts", "queue_wait_sec", "handle_sec", "call_reason",
                 "abandoned", "first_call_resolved"], calls)
-    return {"ami_meter_reads": len(recs), "call_center_calls": len(calls)}
+    return {"ami_meter_reads": len(recs), "call_center_calls": len(calls), **sap_changes_for_day(out_dir, day)}
 
 
 if __name__ == "__main__":

@@ -90,6 +90,11 @@ sap_billing_doc:
   format: csv
   silver_table: billing_document
   keys: [bill_id]
+  order_by: changed_on                 # newest SAP change wins in MERGE
+  sap_extract:                         # notebook 01b: pull only rows changed since the last load
+    sap_table: billing_doc
+    change_col: AEDAT
+    overlap_days: 1
   columns:
     BELNR:          {name: bill_id,       type: string}
     VKONT:          {name: account_id,    type: string}
@@ -101,17 +106,24 @@ sap_billing_doc:
     FAEDN:          {name: due_date,      type: sap_date}
     BILL_STATUS:    {name: bill_status,   type: string}
     ESTIMATED_FLAG: {name: is_estimated,  type: flag}
+    AEDAT:          {name: changed_on,    type: sap_date}
   checks:
     bill_not_null: "bill_id IS NOT NULL"
     account_not_null: "account_id IS NOT NULL"
     bill_date_valid: "bill_date IS NOT NULL"
     amount_not_null: "billed_amount IS NOT NULL"
     status_valid: "bill_status IN ('BILLED','REVERSED','REVERSAL')"
+    changed_on_valid: "changed_on IS NOT NULL"
 
 sap_payment:
   format: csv
   silver_table: payment
   keys: [payment_id]
+  order_by: changed_on
+  sap_extract:
+    sap_table: payment
+    change_col: AEDAT
+    overlap_days: 1
   columns:
     OPBEL:   {name: payment_id,     type: string}
     VKONT:   {name: account_id,     type: string}
@@ -119,9 +131,11 @@ sap_payment:
     BUDAT:   {name: payment_date,   type: sap_date}
     BETRZ:   {name: payment_amount, type: sap_amount}
     CHANNEL: {name: channel,        type: string}
+    AEDAT:   {name: changed_on,     type: sap_date}
   checks:
     payment_not_null: "payment_id IS NOT NULL"
     amount_positive: "payment_amount > 0"
+    changed_on_valid: "changed_on IS NOT NULL"
 
 call_center_calls:
   format: csv

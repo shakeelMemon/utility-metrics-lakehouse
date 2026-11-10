@@ -19,6 +19,7 @@ from utility_lakehouse.generator import generate  # noqa: E402
 from utility_lakehouse.gold_sql import GOLD_TABLES, render  # noqa: E402
 from utility_lakehouse.metrics import all_metrics_sql  # noqa: E402
 from utility_lakehouse.pipeline import load_yaml, prepare_silver  # noqa: E402
+from utility_lakehouse.sap_extract import SAP_SYSTEM_DIR, extract_source  # noqa: E402
 from utility_lakehouse.transforms import scd2_from_versions  # noqa: E402
 
 ap = argparse.ArgumentParser()
@@ -42,6 +43,10 @@ def save(df, name):
 
 for name, spec in load_yaml("sources.yml").items():
     path = str(out / "landing" / name)
+    if spec.get("sap_extract"):                      # incremental SAP extract (notebook 01b)
+        r = extract_source(spark, str(out / "landing" / SAP_SYSTEM_DIR / f"{spec['sap_extract']['sap_table']}.csv"),
+                           f"silver.{spec['silver_table']}", spec, f"{path}/extract_local.csv")
+        print(f"{name:22s} SAP extract from {r['since'] or 'FULL'}: {r['rows']:,} rows")
     raw = (spark.read.option("header", True).csv(path) if spec["format"] == "csv"
            else spark.read.option("primitivesAsString", True).json(path))
     save(raw.withColumn("_ingest_ts", F.current_timestamp()).withColumn("_source_file", F.col("_metadata.file_path")),

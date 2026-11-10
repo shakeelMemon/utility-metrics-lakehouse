@@ -1,4 +1,4 @@
-# Pipeline job: setup -> bronze -> silver -> gold -> metrics -> data-quality gate -> maintenance
+# Pipeline job: setup -> SAP extract (changed-on date) -> bronze -> silver -> gold -> metrics -> data-quality gate -> maintenance
 # No cluster is defined, so tasks run on serverless compute (works in Databricks Free Edition).
 resources:
   jobs:
@@ -16,8 +16,12 @@ resources:
         - task_key: setup
           notebook_task: {notebook_path: ../notebooks/00_setup.py}
 
-        - task_key: bronze
+        - task_key: sap_extract
           depends_on: [{task_key: setup}]
+          notebook_task: {notebook_path: ../notebooks/01b_sap_extract.py}
+
+        - task_key: bronze
+          depends_on: [{task_key: sap_extract}]
           max_retries: 1                              # restarts once if Auto Loader evolved the schema
           notebook_task: {notebook_path: ../notebooks/02_bronze_autoloader.py}
 

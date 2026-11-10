@@ -33,6 +33,12 @@ scale to 100."
 **Why keep bronze as raw strings?** "So nothing is lost or misread on arrival, and I can
 always reprocess. Typing and rules happen in silver, where failures are quarantined, not dropped."
 
+**How do you load only changed SAP records?** "SAP keeps a changed-on date, AEDAT. I take the
+high-water mark from the target table itself, the latest changed_on already in silver, query SAP for
+AEDAT on or after that date minus one day, and MERGE on the SAP key. No separate watermark table, a
+failed run recovers by itself, and the overlap never double-counts. Hard deletes need a deletion flag
+or a periodic key compare."
+
 **How do you handle a file that arrives twice or late?** "Auto Loader's checkpoint loads each file
 once. In silver, MERGE on the business key keeps only the latest version, so duplicates don't double
 count and a late correction updates the existing row."
