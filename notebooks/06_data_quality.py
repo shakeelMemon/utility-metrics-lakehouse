@@ -60,6 +60,19 @@ s_kwh = spark.sql(f"SELECT sum(kwh) v FROM {CAT}.silver.meter_read_daily").first
 g_kwh = spark.sql(f"SELECT sum(kwh) v FROM {CAT}.gold.fact_daily_usage").first().v
 results.append(q.reconcile("kWh silver vs gold", "gold.fact_daily_usage", s_kwh, g_kwh, tolerance=0.5))
 
+# data vault: hubs hold every silver key; the current satellite equals silver (audit trail is complete)
+if spark.catalog.tableExists(f"{CAT}.vault.hub_bill"):
+    h = spark.table(f"{CAT}.vault.hub_bill").count()
+    s_n = spark.sql(f"SELECT count(DISTINCT bill_id) n FROM {CAT}.silver.billing_document").first().n
+    results.append(q.reconcile("hub_bill keys vs silver bills", "vault.hub_bill", s_n, h, tolerance=0))
+    v_bill = spark.sql(f"""SELECT sum(billed_amount) v FROM (
+                             SELECT *, row_number() OVER (PARTITION BY bill_hk
+                                       ORDER BY effective_from DESC NULLS LAST, load_dts DESC) rn
+                             FROM {CAT}.vault.sat_bill) WHERE rn = 1 AND bill_status = 'BILLED'""").first().v
+    results.append(q.reconcile("billed_amount silver vs vault", "vault.sat_bill", s_bill, v_bill))
+    no_source = spark.sql(f"SELECT count(*) n FROM {CAT}.vault.sat_bill WHERE record_source IS NULL OR load_dts IS NULL").first().n
+    results.append(q._row("vault_rows_have_source", "vault.sat_bill", "CRITICAL", no_source == 0, no_source, "0 rows without source"))
+
 # metrics: every catalogue metric has values, percentages are 0..1
 missing = spark.sql(f"""SELECT count(*) n FROM {CAT}.gold.metric_catalog c
                         LEFT ANTI JOIN {CAT}.gold.metric_values v USING (metric_id)""").first().n

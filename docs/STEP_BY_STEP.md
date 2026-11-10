@@ -59,8 +59,8 @@ Notice the SAP formats: `BUDAT = 20260603`, `BETRW` amounts, and `R...` reversal
 
 ## Step 5: Run the pipeline job
 
-- **Git folder:** **Workflows → Create job**, add the eight notebook tasks in order
-  (`00_setup` → `01b_sap_extract` → `02_bronze_autoloader` → `03_silver` → `04_gold` → `05_metrics` →
+- **Git folder:** **Workflows → Create job**, add the nine notebook tasks in order
+  (`00_setup` → `01b_sap_extract` → `02_bronze_autoloader` → `03_silver` → `03b_data_vault` → `04_gold` → `05_metrics` →
   `06_data_quality` → `07_maintenance`), add a job parameter `catalog = utility_lab`, and **Run now**.
   You can also run the notebooks one by one.
 - **Bundle:** `databricks bundle run utility_metrics_pipeline -t dev`
@@ -73,6 +73,7 @@ Takes about 5–10 minutes on serverless.
 |---|---|
 | bronze | "new rows" printed per source; `bronze.ami_meter_reads` has `voltage_v`, `_ingest_ts`, `_source_file` |
 | silver | ~855 meter reads and 1 outage **quarantined**, with reasons (`kwh_not_negative`, `meter_not_null`…) |
+| data vault | `vault` schema: 4 hubs, 3 links, 2 satellites; a rerun adds 0 rows |
 | gold | 12 tables (5 dimensions, 7 facts) with row counts |
 | metrics | 52 metrics in the catalogue; a table of the latest month's values |
 | data_quality | "Data-quality gate passed" (a freshness WARN is fine) |

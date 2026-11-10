@@ -33,6 +33,13 @@ scale to 100."
 **Why keep bronze as raw strings?** "So nothing is lost or misread on arrival, and I can
 always reprocess. Typing and rules happen in silver, where failures are quarantined, not dropped."
 
+**How do you keep an auditable history / did you use Data Vault?** "Next to silver I keep a small
+Data Vault 2.0 layer: hubs for business keys (customer, account, premise, bill), links for their
+relationships, and satellites for the attributes. Every row has a SHA-256 hash key, a load date and
+the record source file, and satellites only get a new row when the hash_diff of the attributes
+changes. It's insert-only, so any past state can be rebuilt, and the quality gate reconciles the
+vault back to silver. Gold stays a star schema for Power BI."
+
 **How do you load only changed SAP records?** "SAP keeps a changed-on date, AEDAT. I take the
 high-water mark from the target table itself, the latest changed_on already in silver, query SAP for
 AEDAT on or after that date minus one day, and MERGE on the SAP key. No separate watermark table, a

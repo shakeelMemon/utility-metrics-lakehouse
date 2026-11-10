@@ -1,4 +1,4 @@
-# Pipeline job: setup -> SAP extract (changed-on date) -> bronze -> silver -> gold -> metrics -> data-quality gate -> maintenance
+# Pipeline job: setup -> SAP extract (changed-on date) -> bronze -> silver -> (data vault | gold) -> silver -> gold -> metrics -> data-quality gate -> maintenance
 # No cluster is defined, so tasks run on serverless compute (works in Databricks Free Edition).
 resources:
   jobs:
@@ -29,6 +29,10 @@ resources:
           depends_on: [{task_key: bronze}]
           notebook_task: {notebook_path: ../notebooks/03_silver.py}
 
+        - task_key: data_vault
+          depends_on: [{task_key: silver}]
+          notebook_task: {notebook_path: ../notebooks/03b_data_vault.py}
+
         - task_key: gold
           depends_on: [{task_key: silver}]
           notebook_task: {notebook_path: ../notebooks/04_gold.py}
@@ -38,7 +42,7 @@ resources:
           notebook_task: {notebook_path: ../notebooks/05_metrics.py}
 
         - task_key: data_quality
-          depends_on: [{task_key: metrics}]
+          depends_on: [{task_key: metrics}, {task_key: data_vault}]
           notebook_task: {notebook_path: ../notebooks/06_data_quality.py}
 
         - task_key: maintenance

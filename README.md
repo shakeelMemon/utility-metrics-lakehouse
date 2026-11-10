@@ -33,6 +33,7 @@ Agile sprints.*
 | Layer | What happens | Key techniques |
 |---|---|---|
 | **SAP extract** | Only SAP records changed since the last load | SAP changed-on date (`AEDAT`); high-water mark taken from the silver table itself (no separate watermark table); 1-day overlap; linked-server `OPENQUERY` statement generated for production (`sap_extract.py`) |
+| **Data Vault** | Auditable, insert-only history next to silver | Hubs (business keys), links (relationships), satellites (attributes) with SHA-256 hash keys, `hash_diff`, `load_dts` and `record_source`; reconciled to silver in the quality gate (`vault.py`, notebook 03b) |
 | **Bronze** | Files loaded exactly as received | Auto Loader, `availableNow`, checkpoints, schema evolution (`voltage_v` appears later), `_metadata.file_path` |
 | **Silver** | Clean, conform, de-duplicate, keep history | SAP field mapping in YAML, `try_cast`, quality rules, quarantine table, Delta `MERGE` upserts (idempotent), late-arriving corrections, **SCD Type 2** customers, watermark-based incremental |
 | **Gold** | Business-ready star schema | Conformed dimensions, facts at a clear grain, AR aging snapshot, reliability inputs, liquid clustering |

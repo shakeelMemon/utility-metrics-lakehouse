@@ -8,6 +8,7 @@
 # MAGIC | `landing` | Unity Catalog volume `raw` where source files arrive, plus `checkpoints` for Auto Loader |
 # MAGIC | `bronze` | Raw data exactly as received (all strings) + ingest time and source file |
 # MAGIC | `silver` | Cleaned, conformed, de-duplicated; SAP names mapped to business names; SCD Type 2 history |
+# MAGIC | `vault` | Data Vault 2.0 audit layer: hubs, links, satellites (insert-only, full history) |
 # MAGIC | `gold` | Star schema (facts and dimensions) and the metric layer that Power BI reads |
 # MAGIC | `ops` | Load audit, data-quality results and incremental watermarks |
 
@@ -30,6 +31,7 @@ for schema, comment in [
     ("bronze", "Raw data as received"),
     ("silver", "Cleaned and conformed data"),
     ("gold", "Business-ready star schema and metrics for Power BI"),
+    ("vault", "Data Vault 2.0: insert-only hubs, links and satellites with load date and record source"),
     ("ops", "Audit, data quality and watermarks"),
 ]:
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CAT}.{schema} COMMENT '{comment}'")

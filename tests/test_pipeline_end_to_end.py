@@ -17,6 +17,7 @@ from utility_lakehouse.pipeline import load_yaml, prepare_silver
 from utility_lakehouse.generator import sap_changes_for_day
 from utility_lakehouse.sap_extract import SAP_SYSTEM_DIR, extract_source, window_start
 from utility_lakehouse.transforms import scd2_from_versions
+from utility_lakehouse import vault
 
 CAT = "spark_catalog"
 
@@ -152,3 +153,25 @@ def test_second_extract_pulls_only_changed_rows_and_merge_updates(spark, built):
               .unionByName(good.select(*before.columns)))
     assert merged.count() == full
     assert merged.where(F.col("bill_id") == corrected[0].bill_id).first().billed_amount == corrected[0].billed_amount
+
+
+def test_data_vault_reconciles_to_silver(spark, built):
+    """Hubs hold every business key once; the current satellite equals silver."""
+    ts = "2026-11-10 06:30:00"
+    tables = {}
+    for name, (table, keys) in vault.HUBS.items():
+        hk = name.replace("hub_", "") + "_hk"
+        tables[name] = vault.stage_hub(spark.table(f"{CAT}.silver.{table}"), keys, hk, ts)
+    for name, (table, hk, keys, attrs, order) in vault.SATS.items():
+        tables[name] = vault.new_sat_rows(vault.stage_sat(spark.table(f"{CAT}.silver.{table}"), hk, keys, attrs,
+                                                          order, ts), None, hk)
+    silver_bills = spark.table(f"{CAT}.silver.billing_document")
+    assert tables["hub_bill"].count() == silver_bills.select("bill_id").distinct().count()
+    assert tables["hub_customer"].count() == spark.table(f"{CAT}.silver.customer_scd2").select("partner_id").distinct().count()
+    cur = vault.current_sat(tables["sat_bill"], "bill_hk")
+    v_sum = cur.where("bill_status = 'BILLED'").agg(F.sum("billed_amount")).first()[0]
+    s_sum = silver_bills.where("bill_status = 'BILLED'").agg(F.sum("billed_amount")).first()[0]
+    assert abs(float(v_sum) - float(s_sum)) < 0.01
+    # customer history: the satellite keeps every SCD2 version
+    assert tables["sat_customer"].count() == spark.table(f"{CAT}.silver.customer_scd2").count()
+    assert tables["hub_bill"].where("record_source IS NULL OR load_dts IS NULL").count() == 0
